@@ -360,6 +360,21 @@ volatile uint32_t km003c_dbg_hub_get_status_ok    = 0;
 volatile uint32_t km003c_dbg_hub_get_status_fail  = 0;
 volatile uint32_t km003c_dbg_hub_last_port_count  = 0;
 volatile uint32_t km003c_dbg_hub_last_status_chg  = 0;
+// Port-change outcomes: how many times hub.c concluded "device attached" /
+// "device removed" for a port, and the raw wPortStatus/wPortChange behind
+// the most recent removal — to tell a genuine unplug from a spurious one.
+volatile uint32_t km003c_dbg_hub_attach_events    = 0;
+volatile uint32_t km003c_dbg_hub_remove_events    = 0;
+volatile uint32_t km003c_dbg_hub_last_port_status = 0;
+volatile uint32_t km003c_dbg_hub_last_port_change = 0;
+
+void km003c_hub_event_counters(uint32_t *attach, uint32_t *remove,
+                               uint32_t *last_port_status, uint32_t *last_port_change) {
+  if (attach)           *attach           = km003c_dbg_hub_attach_events;
+  if (remove)           *remove           = km003c_dbg_hub_remove_events;
+  if (last_port_status) *last_port_status = km003c_dbg_hub_last_port_status;
+  if (last_port_change) *last_port_change = km003c_dbg_hub_last_port_change;
+}
 
 void km003c_hub_xfer_cb_debug_counters(uint32_t *xfer_fail, uint32_t *status_zero,
                                         uint32_t *bit0, uint32_t *port_match,
@@ -582,10 +597,14 @@ static void connection_clear_conn_change_complete (tuh_xfer_t* xfer)
 
   if ( p_hub->port_status.status.connection )
   {
+    km003c_dbg_hub_attach_events++;
     // Reset port if attach event
     hub_port_reset(daddr, port_num, connection_port_reset_complete, 0);
   }else
   {
+    km003c_dbg_hub_remove_events++;
+    km003c_dbg_hub_last_port_status = p_hub->port_status.status.value;
+    km003c_dbg_hub_last_port_change = p_hub->port_status.change.value;
     // submit detach event
     hcd_event_t event =
     {

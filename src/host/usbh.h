@@ -183,6 +183,10 @@ tusb_speed_t tuh_speed_get(uint8_t daddr);
 // Check if device is connected and configured
 bool tuh_mounted(uint8_t daddr);
 
+// km003c_rp2_webapp addition: upstream hub address/port of a device
+// (hub_addr == 0 means it is attached directly to the root port).
+bool tuh_hub_path_get(uint8_t daddr, uint8_t* hub_addr, uint8_t* hub_port);
+
 // Check if device is suspended
 TU_ATTR_ALWAYS_INLINE static inline
 bool tuh_suspended(uint8_t daddr) {

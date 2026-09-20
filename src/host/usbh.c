@@ -635,6 +635,17 @@ void km003c_tuh_control_xfer_debug_counters(uint32_t *bad_args, uint32_t *dev0_n
   if (submitted)        *submitted     = km003c_dbg_ctrl_submitted;
 }
 
+// km003c_rp2_webapp: expose a device's upstream hub path so an application
+// can raise a device-removal event for exactly that device (hub_addr/port)
+// instead of a root-port removal, which would tear down the hub itself.
+bool tuh_hub_path_get(uint8_t daddr, uint8_t* hub_addr, uint8_t* hub_port) {
+  usbh_device_t const* dev = get_device(daddr);
+  TU_VERIFY(dev);
+  if (hub_addr) *hub_addr = dev->hub_addr;
+  if (hub_port) *hub_port = dev->hub_port;
+  return true;
+}
+
 // TODO timeout_ms is not supported yet
 bool tuh_control_xfer (tuh_xfer_t* xfer) {
   // EP0 with setup packet
