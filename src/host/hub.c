@@ -334,7 +334,16 @@ static void connection_port_reset_complete (tuh_xfer_t* xfer);
 bool hub_xfer_cb(uint8_t dev_addr, uint8_t ep_addr, xfer_result_t result, uint32_t xferred_bytes) {
   (void) xferred_bytes; // TODO can be more than 1 for hub with lots of ports
   (void) ep_addr;
-  TU_VERIFY(result == XFER_RESULT_SUCCESS);
+  if (result != XFER_RESULT_SUCCESS) {
+    // km003c_rp2_webapp fix: a non-success completion on the hub's status
+    // interrupt endpoint (e.g. a transient error from a downstream port
+    // event) used to bail out here without re-arming, permanently killing
+    // this hub's port-change notifications for the rest of the session
+    // (confirmed via wire capture: polling ran cleanly, then stopped dead
+    // after one non-success completion and never resumed). Re-arm instead
+    // of giving up.
+    return hub_edpt_status_xfer(dev_addr);
+  }
 
   hub_interface_t* p_hub = get_itf(dev_addr);
 
