@@ -736,7 +736,16 @@ static bool usbh_control_xfer_cb (uint8_t daddr, uint8_t ep_addr, xfer_result_t 
         if (request->wLength) {
           // DATA stage: initial data toggle is always 1
           _set_control_xfer_stage(CONTROL_STAGE_DATA);
-          TU_ASSERT( hcd_edpt_xfer(rhport, daddr, tu_edpt_addr(0, request->bmRequestType_bit.direction), _ctrl_xfer.buffer, request->wLength) );
+          if (!hcd_edpt_xfer(rhport, daddr, tu_edpt_addr(0, request->bmRequestType_bit.direction), _ctrl_xfer.buffer, request->wLength)) {
+            // km003c_rp2_webapp fix: a failed submission here used to leave
+            // _ctrl_xfer.stage stuck at CONTROL_STAGE_DATA forever (only the
+            // success path reset it), permanently wedging tuh_control_xfer()
+            // for every device for the rest of the session — confirmed via
+            // wire capture where a hub's own port-status control transfers
+            // silently stopped being sent after a device enumerated nearby,
+            // while unrelated bulk/interrupt transfers kept working fine.
+            _control_xfer_complete(daddr, XFER_RESULT_FAILED);
+          }
           return true;
         }
         TU_ATTR_FALLTHROUGH;
@@ -751,7 +760,10 @@ static bool usbh_control_xfer_cb (uint8_t daddr, uint8_t ep_addr, xfer_result_t 
 
         // ACK stage: toggle is always 1
         _set_control_xfer_stage(CONTROL_STAGE_ACK);
-        TU_ASSERT( hcd_edpt_xfer(rhport, daddr, tu_edpt_addr(0, 1 - request->bmRequestType_bit.direction), NULL, 0) );
+        if (!hcd_edpt_xfer(rhport, daddr, tu_edpt_addr(0, 1 - request->bmRequestType_bit.direction), NULL, 0)) {
+          // km003c_rp2_webapp fix: same as above, for the ACK stage.
+          _control_xfer_complete(daddr, XFER_RESULT_FAILED);
+        }
         break;
 
       case CONTROL_STAGE_ACK: {
