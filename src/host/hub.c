@@ -431,15 +431,48 @@ bool hub_xfer_cb(uint8_t dev_addr, uint8_t ep_addr, xfer_result_t result, uint32
   return true;
 }
 
+// km003c_rp2_webapp diagnostic counters: how many times each of hub.c's
+// completion callbacks got a non-success xfer->result and had to recover
+// via re-arm instead of running its normal logic.
+volatile uint32_t km003c_dbg_hub_clear_feature_fail    = 0;
+volatile uint32_t km003c_dbg_hub_get_status_cb_fail    = 0;
+volatile uint32_t km003c_dbg_hub_port_get_status_fail  = 0;
+volatile uint32_t km003c_dbg_hub_clear_conn_fail       = 0;
+volatile uint32_t km003c_dbg_hub_port_reset_fail       = 0;
+
+void km003c_hub_completion_fail_counters(uint32_t *clear_feature, uint32_t *get_status_cb,
+                                          uint32_t *port_get_status, uint32_t *clear_conn,
+                                          uint32_t *port_reset) {
+  if (clear_feature)    *clear_feature    = km003c_dbg_hub_clear_feature_fail;
+  if (get_status_cb)    *get_status_cb    = km003c_dbg_hub_get_status_cb_fail;
+  if (port_get_status)  *port_get_status  = km003c_dbg_hub_port_get_status_fail;
+  if (clear_conn)       *clear_conn       = km003c_dbg_hub_clear_conn_fail;
+  if (port_reset)       *port_reset       = km003c_dbg_hub_port_reset_fail;
+}
+
 static void hub_clear_feature_complete_stub(tuh_xfer_t* xfer)
 {
-  TU_ASSERT(xfer->result == XFER_RESULT_SUCCESS, );
+  // km003c_rp2_webapp fix: re-arm unconditionally — the success path did
+  // this anyway, but a failed CLEAR_FEATURE response used to bail via
+  // TU_ASSERT before reaching it, permanently stopping hub monitoring
+  // for the rest of the session (same class of bug as hub_xfer_cb's own
+  // fix above — TinyUSB's hub.c completion chain has no recovery path
+  // for a transient error at ANY of its several stages, and PIO-USB's
+  // software host controller genuinely produces transient receive
+  // errors often enough in practice to hit this).
+  if (xfer->result != XFER_RESULT_SUCCESS) {
+    km003c_dbg_hub_clear_feature_fail++;
+  }
   hub_edpt_status_xfer(xfer->daddr);
 }
 
 static void hub_get_status_complete (tuh_xfer_t* xfer)
 {
-  TU_ASSERT(xfer->result == XFER_RESULT_SUCCESS, );
+  if (xfer->result != XFER_RESULT_SUCCESS) {
+    km003c_dbg_hub_get_status_cb_fail++;
+    hub_edpt_status_xfer(xfer->daddr);
+    return;
+  }
 
   uint8_t const daddr = xfer->daddr;
   hub_interface_t* p_hub = get_itf(daddr);
@@ -458,11 +491,21 @@ static void hub_get_status_complete (tuh_xfer_t* xfer)
     TU_LOG1("HUB Over Current, addr = %u\r\n", daddr);
     hub_port_clear_feature(daddr, port_num, HUB_FEATURE_HUB_OVER_CURRENT_CHANGE, hub_clear_feature_complete_stub, 0);
   }
+  else
+  {
+    // km003c_rp2_webapp fix: no recognized hub-level change bit — the
+    // original code just fell through here with nothing resubmitted.
+    hub_edpt_status_xfer(daddr);
+  }
 }
 
 static void hub_port_get_status_complete (tuh_xfer_t* xfer)
 {
-  TU_ASSERT(xfer->result == XFER_RESULT_SUCCESS, );
+  if (xfer->result != XFER_RESULT_SUCCESS) {
+    km003c_dbg_hub_port_get_status_fail++;
+    hub_edpt_status_xfer(xfer->daddr);
+    return;
+  }
 
   uint8_t const daddr = xfer->daddr;
   hub_interface_t* p_hub = get_itf(daddr);
@@ -509,7 +552,11 @@ static void hub_port_get_status_complete (tuh_xfer_t* xfer)
 
 static void connection_clear_conn_change_complete (tuh_xfer_t* xfer)
 {
-  TU_ASSERT(xfer->result == XFER_RESULT_SUCCESS, );
+  if (xfer->result != XFER_RESULT_SUCCESS) {
+    km003c_dbg_hub_clear_conn_fail++;
+    hub_edpt_status_xfer(xfer->daddr);
+    return;
+  }
 
   uint8_t const daddr = xfer->daddr;
   hub_interface_t* p_hub = get_itf(daddr);
@@ -539,7 +586,11 @@ static void connection_clear_conn_change_complete (tuh_xfer_t* xfer)
 
 static void connection_port_reset_complete (tuh_xfer_t* xfer)
 {
-  TU_ASSERT(xfer->result == XFER_RESULT_SUCCESS, );
+  if (xfer->result != XFER_RESULT_SUCCESS) {
+    km003c_dbg_hub_port_reset_fail++;
+    hub_edpt_status_xfer(xfer->daddr);
+    return;
+  }
 
   uint8_t const daddr = xfer->daddr;
   // hub_interface_t* p_hub = get_itf(daddr);
