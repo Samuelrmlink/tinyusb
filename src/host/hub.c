@@ -331,6 +331,34 @@ static void connection_clear_conn_change_complete (tuh_xfer_t* xfer);
 static void connection_port_reset_complete (tuh_xfer_t* xfer);
 
 // callback as response of interrupt endpoint polling
+// km003c_rp2_webapp diagnostic counters for hub_xfer_cb's decision path —
+// see km003c_hub_xfer_cb_debug_counters() / usbdiag_usb.c.
+volatile uint32_t km003c_dbg_hub_xfer_fail        = 0;
+volatile uint32_t km003c_dbg_hub_status_zero      = 0;
+volatile uint32_t km003c_dbg_hub_bit0             = 0;
+volatile uint32_t km003c_dbg_hub_port_match       = 0;
+volatile uint32_t km003c_dbg_hub_no_port_match    = 0;
+volatile uint32_t km003c_dbg_hub_get_status_ok    = 0;
+volatile uint32_t km003c_dbg_hub_get_status_fail  = 0;
+volatile uint32_t km003c_dbg_hub_last_port_count  = 0;
+volatile uint32_t km003c_dbg_hub_last_status_chg  = 0;
+
+void km003c_hub_xfer_cb_debug_counters(uint32_t *xfer_fail, uint32_t *status_zero,
+                                        uint32_t *bit0, uint32_t *port_match,
+                                        uint32_t *no_port_match, uint32_t *get_status_ok,
+                                        uint32_t *get_status_fail, uint32_t *last_port_count,
+                                        uint32_t *last_status_chg) {
+  if (xfer_fail)        *xfer_fail        = km003c_dbg_hub_xfer_fail;
+  if (status_zero)       *status_zero      = km003c_dbg_hub_status_zero;
+  if (bit0)                *bit0             = km003c_dbg_hub_bit0;
+  if (port_match)          *port_match       = km003c_dbg_hub_port_match;
+  if (no_port_match)       *no_port_match    = km003c_dbg_hub_no_port_match;
+  if (get_status_ok)       *get_status_ok    = km003c_dbg_hub_get_status_ok;
+  if (get_status_fail)     *get_status_fail  = km003c_dbg_hub_get_status_fail;
+  if (last_port_count)     *last_port_count  = km003c_dbg_hub_last_port_count;
+  if (last_status_chg)     *last_status_chg  = km003c_dbg_hub_last_status_chg;
+}
+
 bool hub_xfer_cb(uint8_t dev_addr, uint8_t ep_addr, xfer_result_t result, uint32_t xferred_bytes) {
   (void) xferred_bytes; // TODO can be more than 1 for hub with lots of ports
   (void) ep_addr;
@@ -342,6 +370,7 @@ bool hub_xfer_cb(uint8_t dev_addr, uint8_t ep_addr, xfer_result_t result, uint32
     // (confirmed via wire capture: polling ran cleanly, then stopped dead
     // after one non-success completion and never resumed). Re-arm instead
     // of giving up.
+    km003c_dbg_hub_xfer_fail++;
     return hub_edpt_status_xfer(dev_addr);
   }
 
@@ -349,31 +378,52 @@ bool hub_xfer_cb(uint8_t dev_addr, uint8_t ep_addr, xfer_result_t result, uint32
 
   uint8_t const status_change = p_hub->status_change;
   TU_LOG2("  Hub Status Change = 0x%02X\r\n", status_change);
+  km003c_dbg_hub_last_status_chg = status_change;
+  km003c_dbg_hub_last_port_count = p_hub->port_count;
 
   if ( status_change == 0 ) {
     // The status change event was neither for the hub, nor for any of its ports.
     // This shouldn't happen, but it does with some devices.
     // Initiate the next interrupt poll here.
+    km003c_dbg_hub_status_zero++;
     return hub_edpt_status_xfer(dev_addr);
   }
 
   if (tu_bit_test(status_change, 0)) {
     // Hub bit 0 is for the hub device events
+    km003c_dbg_hub_bit0++;
     if (hub_port_get_status(dev_addr, 0, &p_hub->hub_status, hub_get_status_complete, 0) == false) {
       //Hub status control transfer failed, retry
+      km003c_dbg_hub_get_status_fail++;
       hub_edpt_status_xfer(dev_addr);
+    } else {
+      km003c_dbg_hub_get_status_ok++;
     }
   }
   else {
     // Hub bits 1 to n are hub port events
+    bool matched = false;
     for (uint8_t port=1; port <= p_hub->port_count; port++) {
       if ( tu_bit_test(status_change, port) ) {
+        matched = true;
+        km003c_dbg_hub_port_match++;
         if (hub_port_get_status(dev_addr, port, &p_hub->port_status, hub_port_get_status_complete, 0) == false) {
           //Hub status control transfer failed, retry
+          km003c_dbg_hub_get_status_fail++;
           hub_edpt_status_xfer(dev_addr);
+        } else {
+          km003c_dbg_hub_get_status_ok++;
         }
         break;
       }
+    }
+    if (!matched) {
+      // km003c_rp2_webapp diagnostic: status_change had a bit set outside
+      // bit 0 and outside 1..port_count (e.g. port_count read back wrong,
+      // or a bit for a port number the hub descriptor didn't account for)
+      // — falls through with nothing resubmitted from here, relying
+      // entirely on usbh.c's own periodic re-arm to keep polling alive.
+      km003c_dbg_hub_no_port_match++;
     }
   }
 
