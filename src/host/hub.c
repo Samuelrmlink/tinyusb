@@ -232,10 +232,28 @@ void hub_close(uint8_t dev_addr)
   }
 }
 
+// km003c_rp2_webapp diagnostic counters: every recovery path re-arms the
+// interrupt endpoint via this one function, but none of them check its
+// return value — if THIS itself silently fails to submit, the interrupt
+// endpoint never gets polled again and nothing downstream can ever notice.
+volatile uint32_t km003c_dbg_edpt_status_xfer_ok   = 0;
+volatile uint32_t km003c_dbg_edpt_status_xfer_fail = 0;
+
+void km003c_hub_edpt_status_xfer_counters(uint32_t *ok, uint32_t *fail) {
+  if (ok)   *ok   = km003c_dbg_edpt_status_xfer_ok;
+  if (fail) *fail = km003c_dbg_edpt_status_xfer_fail;
+}
+
 bool hub_edpt_status_xfer(uint8_t dev_addr)
 {
   hub_interface_t* hub_itf = get_itf(dev_addr);
-  return usbh_edpt_xfer(dev_addr, hub_itf->ep_in, &hub_itf->status_change, 1);
+  bool const ok = usbh_edpt_xfer(dev_addr, hub_itf->ep_in, &hub_itf->status_change, 1);
+  if (ok) {
+    km003c_dbg_edpt_status_xfer_ok++;
+  } else {
+    km003c_dbg_edpt_status_xfer_fail++;
+  }
+  return ok;
 }
 
 
