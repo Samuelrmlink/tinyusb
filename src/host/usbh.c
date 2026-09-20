@@ -616,22 +616,41 @@ static void _control_blocking_complete_cb(tuh_xfer_t* xfer) {
   *((xfer_result_t*) xfer->user_data) = xfer->result;
 }
 
+// km003c_rp2_webapp diagnostic counters: why does tuh_control_xfer() bail,
+// when and if it ever does, during the hub-port-status-stuck investigation.
+// Read via km003c_tuh_control_xfer_debug_counters() — see usbdiag_usb.c.
+volatile uint32_t km003c_dbg_ctrl_bad_args      = 0;
+volatile uint32_t km003c_dbg_ctrl_dev0_not_enum = 0;
+volatile uint32_t km003c_dbg_ctrl_not_connected = 0;
+volatile uint32_t km003c_dbg_ctrl_stage_busy    = 0;
+volatile uint32_t km003c_dbg_ctrl_submitted     = 0;
+
+void km003c_tuh_control_xfer_debug_counters(uint32_t *bad_args, uint32_t *dev0_not_enum,
+                                             uint32_t *not_connected, uint32_t *stage_busy,
+                                             uint32_t *submitted) {
+  if (bad_args)      *bad_args      = km003c_dbg_ctrl_bad_args;
+  if (dev0_not_enum)  *dev0_not_enum = km003c_dbg_ctrl_dev0_not_enum;
+  if (not_connected)  *not_connected = km003c_dbg_ctrl_not_connected;
+  if (stage_busy)      *stage_busy    = km003c_dbg_ctrl_stage_busy;
+  if (submitted)        *submitted     = km003c_dbg_ctrl_submitted;
+}
+
 // TODO timeout_ms is not supported yet
 bool tuh_control_xfer (tuh_xfer_t* xfer) {
   // EP0 with setup packet
-  TU_VERIFY(xfer->ep_addr == 0 && xfer->setup);
+  if (!(xfer->ep_addr == 0 && xfer->setup)) { km003c_dbg_ctrl_bad_args++; return false; }
 
   // Check if device is still connected (enumerating for dev0)
   const uint8_t daddr = xfer->daddr;
   if (daddr == 0) {
-    TU_VERIFY(_dev0.enumerating);
+    if (!_dev0.enumerating) { km003c_dbg_ctrl_dev0_not_enum++; return false; }
   } else {
     const usbh_device_t* dev = get_device(daddr);
-    TU_VERIFY(dev && dev->connected);
+    if (!(dev && dev->connected)) { km003c_dbg_ctrl_not_connected++; return false; }
   }
 
   // pre-check to help reducing mutex lock
-  TU_VERIFY(_ctrl_xfer.stage == CONTROL_STAGE_IDLE);
+  if (_ctrl_xfer.stage != CONTROL_STAGE_IDLE) { km003c_dbg_ctrl_stage_busy++; return false; }
   (void) osal_mutex_lock(_usbh_mutex, OSAL_TIMEOUT_WAIT_FOREVER);
 
   bool const is_idle = (_ctrl_xfer.stage == CONTROL_STAGE_IDLE);
@@ -648,7 +667,8 @@ bool tuh_control_xfer (tuh_xfer_t* xfer) {
 
   (void) osal_mutex_unlock(_usbh_mutex);
 
-  TU_VERIFY(is_idle);
+  if (!is_idle) { km003c_dbg_ctrl_stage_busy++; return false; }
+  km003c_dbg_ctrl_submitted++;
   const uint8_t rhport = usbh_get_rhport(daddr);
 
   TU_LOG_USBH("[%u:%u] %s: ", rhport, daddr,
